@@ -203,7 +203,12 @@ class DiematicMqttBridge:
         }
         short_topic = message.topic[len(self._topic_prefix) :]
         if short_topic in table:
-            setattr(self._panel, table[short_topic], float(message.payload))
+            try:
+                value = float(message.payload)
+            except (TypeError, ValueError):
+                _LOGGER.warning("Invalid temperature payload on %s: %s", message.topic, message.payload)
+                return
+            setattr(self._panel, table[short_topic], value)
 
     def _date_set(self, message):
         if message.topic.endswith("/date/set") and message.payload.decode() == "Now":
@@ -258,11 +263,69 @@ class DiematicMqttBridge:
         del client, userdata
         if message.payload.decode() != "online":
             return
-        self._hassio.addSensor("heater_datetime", "Horloge Chaudière", None, "date", "{{ as_timestamp(value) |timestamp_custom ('%d/%m/%Y %H:%M') }}", None)
+
+        # boiler
+        self._hassio.addSensor(
+            "heater_datetime",
+            "Horloge Chaudière",
+            None,
+            "date",
+            "{{ as_timestamp(value) |timestamp_custom ('%d/%m/%Y %H:%M') }}",
+            None,
+        )
         self._hassio.addSwitch("heater_datetime_set", "Synchro Horloge", "unknown", "date/set", "--", "Now")
         self._hassio.addSensor("type", "Type", None, "type", None, None)
         self._hassio.addSensor("ctrl", "Controleur", None, "ctrl", None, None)
         self._hassio.addSensor("ext_temp", "Température Extérieure", "temperature", "ext/temp", None, "°C")
         self._hassio.addSensor("boiler_temp", "Température Chaudière", "temperature", "temp", None, "°C")
+        self._hassio.addSensor("target_temp", "Température Cible", "temperature", "targetTemp", None, "°C")
+        self._hassio.addSensor("return_temp", "Température Retour", "temperature", "returnTemp", None, "°C")
+        self._hassio.addSensor("water_pressure", "Pression d'eau", "pressure", "waterPressure", None, "bar")
+        self._hassio.addSensor("power", "Puissance", "power_factor", "power", None, "%")
+        self._hassio.addSensor("smoke_temp", "Température Fumées", "temperature", "smokeTemp", None, "°C")
+        self._hassio.addSensor("ionization_current", "Courant Ionisation", "current", "ionizationCurrent", None, None)
+        self._hassio.addSensor("fan_speed", "Vitesse Ventilateur", None, "fanSpeed", None, "RPM")
+        self._hassio.addBinarySensor("burner_status", "Etat Bruleur", None, "burnerStatus", "1", "0")
+        self._hassio.addSensor("pump_power", "Puissance Pompe", "power_factor", "pumpPower", None, "%")
+        self._hassio.addSensor("alarm", "Etat", None, "alarm", "{{ value_json.txt}}", None)
+        self._hassio.addSensor("alarm_id", "N° Erreur", None, "alarm", "{{ value_json.id}}", None)
+        self._hassio.addSensor("nb_impuls", "Impulsions Bruleur", None, "nbImpuls", None, None)
+        self._hassio.addSensor("fct_brul", "Fonctionnement Bruleur", None, "fctBrul", None, "hours")
+
+        # hot water
+        self._hassio.addBinarySensor("hot_water_pump", "Pompe ECS", None, "hotWater/pump", "1", "0")
+        self._hassio.addSensor("hot_water_temp", "Température ECS", "temperature", "hotWater/temp", None, "°C")
+        self._hassio.addSelect("hot_water_mode", "Mode ECS", "hotWater/mode", "hotWater/mode/set", ["AUTO", "TEMP", "PERM"])
+        self._hassio.addSensor("hot_water_mode", "Mode ECS", None, "hotWater/mode", None, None)
+        self._hassio.addNumber("hot_water_temp_day", "Température ECS Jour", "hotWater/dayTemp", "hotWater/dayTemp/set", 10, 80, 5, "°C")
+        self._hassio.addNumber("hot_water_temp_night", "Température ECS Nuit", "hotWater/nightTemp", "hotWater/nightTemp/set", 10, 80, 5, "°C")
+
+        # zone A
         self._hassio.addSensor("zone_A_temp", "Température Zone A", "temperature", "zoneA/temp", None, "°C")
+        self._hassio.addSelect(
+            "zone_A_mode",
+            "Mode Zone A",
+            "zoneA/mode",
+            "zoneA/mode/set",
+            ["AUTO", "TEMP JOUR", "PERM JOUR", "TEMP NUIT", "PERM NUIT", "ANTIGEL"],
+        )
+        self._hassio.addSensor("zone_A_mode", "Mode Zone A", None, "zoneA/mode", None, None)
+        self._hassio.addBinarySensor("zone_A_pump", "Pompe Zone A", None, "zoneA/pump", "1", "0")
+        self._hassio.addNumber("zone_A_temp_day", "Température Jour Zone A", "zoneA/dayTemp", "zoneA/dayTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_A_temp_night", "Température Nuit Zone A", "zoneA/nightTemp", "zoneA/nightTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_A_temp_antiice", "Température Antigel Zone A", "zoneA/antiiceTemp", "zoneA/antiiceTemp/set", 5, 20, 0.5, "°C")
+
+        # zone B
         self._hassio.addSensor("zone_B_temp", "Température Zone B", "temperature", "zoneB/temp", None, "°C")
+        self._hassio.addSelect(
+            "zone_B_mode",
+            "Mode Zone B",
+            "zoneB/mode",
+            "zoneB/mode/set",
+            ["AUTO", "TEMP JOUR", "PERM JOUR", "TEMP NUIT", "PERM NUIT", "ANTIGEL"],
+        )
+        self._hassio.addSensor("zone_B_mode", "Mode Zone B", None, "zoneB/mode", None, None)
+        self._hassio.addBinarySensor("zone_B_pump", "Pompe Zone B", None, "zoneB/pump", "1", "0")
+        self._hassio.addNumber("zone_B_temp_day", "Température Jour Zone B", "zoneB/dayTemp", "zoneB/dayTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_B_temp_night", "Température Nuit Zone B", "zoneB/nightTemp", "zoneB/nightTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_B_temp_antiice", "Température Antigel Zone B", "zoneB/antiiceTemp", "zoneB/antiiceTemp/set", 5, 20, 0.5, "°C")

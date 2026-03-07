@@ -13,7 +13,7 @@ Ce dépôt adapte le projet [Benoit3/Diematic_to_MQTT](https://github.com/Benoit
 ## Installation via HACS (custom repository)
 
 1. HACS → `Integrations` → menu ⋮ → `Custom repositories`.
-2. Ajouter l'URL de ce dépôt avec le type `Integration`.
+2. Ajouter l'URL `https://github.com/kromagnsss/DTMQTT` avec le type `Integration`.
 3. Installer **Diematic to MQTT**.
 4. Redémarrer Home Assistant.
 5. Aller dans `Paramètres` → `Appareils et services` → `Ajouter une intégration` → `Diematic to MQTT`.

@@ -9,7 +9,7 @@ from .bridge import DiematicMqttBridge
 from .const import DOMAIN
 
 
-type BridgeStore = dict[str, DiematicMqttBridge]
+BridgeStore = dict[str, DiematicMqttBridge]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
