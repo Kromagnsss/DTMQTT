@@ -1,0 +1,8 @@
+{
+  "name": "Diematic to MQTT",
+  "content_in_root": false,
+  "domains": ["diematic_to_mqtt"],
+  "country": ["FR"],
+  "homeassistant": "2024.6.0",
+  "render_readme": true
+}

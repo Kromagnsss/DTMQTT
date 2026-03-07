@@ -1,0 +1,16 @@
+{
+  "domain": "diematic_to_mqtt",
+  "name": "Diematic to MQTT",
+  "version": "0.1.0",
+  "documentation": "https://github.com/Benoit3/Diematic_to_MQTT",
+  "issue_tracker": "https://github.com/Benoit3/Diematic_to_MQTT/issues",
+  "config_flow": true,
+  "requirements": [
+    "paho-mqtt==2.1.0",
+    "pytz==2024.1"
+  ],
+  "codeowners": [
+    "@Benoit3"
+  ],
+  "iot_class": "local_push"
+}
