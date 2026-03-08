@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Diematic to MQTT",
+        "description": "Configurez la passerelle Diematic vers MQTT",
+        "data": {
+          "name": "Nom",
+          "modbus_host": "Hôte convertisseur Modbus",
+          "modbus_port": "Port convertisseur Modbus",
+          "regulator_type": "Type de régulateur",
+          "regulator_address": "Adresse régulateur (ex: 10 ou 0x0A)",
+          "interface_address": "Adresse interface (ex: 0 ou 0x00)",
+          "period": "Période de rafraîchissement (s)",
+          "timezone": "Fuseau horaire chaudière",
+          "time_sync": "Synchroniser l'horloge chaudière",
+          "enable_circuit_a": "Forcer circuit A",
+          "enable_circuit_b": "Forcer circuit B",
+          "mqtt_host": "Hôte broker MQTT",
+          "mqtt_port": "Port broker MQTT",
+          "mqtt_username": "Utilisateur MQTT",
+          "mqtt_password": "Mot de passe MQTT",
+          "mqtt_client_id": "Client ID MQTT",
+          "mqtt_topic_prefix": "Préfixe topic MQTT",
+          "discovery_enabled": "Activer découverte MQTT HA",
+          "discovery_prefix": "Préfixe découverte"
+        }
+      }
+    },
+    "error": {
+      "invalid_address": "Adresse invalide: utilisez un entier décimal ou hexadécimal (ex: 10 ou 0x0A)."
+    }
+  }
+}
