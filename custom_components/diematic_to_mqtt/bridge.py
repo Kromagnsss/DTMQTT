@@ -1,0 +1,338 @@
+"""Runtime bridge between Diematic modbus and MQTT topics."""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import logging
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+
+import paho.mqtt.client as mqtt
+
+from .const import (
+    CONF_DISCOVERY_ENABLED,
+    CONF_DISCOVERY_PREFIX,
+    CONF_ENABLE_CIRCUIT_A,
+    CONF_ENABLE_CIRCUIT_B,
+    CONF_INTERFACE_ADDRESS,
+    CONF_MODBUS_HOST,
+    CONF_MODBUS_PORT,
+    CONF_MQTT_CLIENT_ID,
+    CONF_MQTT_HOST,
+    CONF_MQTT_PASSWORD,
+    CONF_MQTT_PORT,
+    CONF_MQTT_TOPIC_PREFIX,
+    CONF_MQTT_USERNAME,
+    CONF_PERIOD,
+    CONF_REGULATOR_ADDRESS,
+    CONF_REGULATOR_TYPE,
+    CONF_TIME_SYNC,
+    CONF_TIMEZONE,
+    OFFLINE,
+    ONLINE,
+)
+from .vendor import Diematic3Panel, Diematic4Panel, DiematicDeltaPanel, Hassio
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class MessageEntry:
+    value: str
+    update: bool = True
+
+
+class MessageBuffer:
+    def __init__(self, client: mqtt.Client, topic_prefix: str) -> None:
+        self._client = client
+        self._topic_prefix = topic_prefix
+        self._buffer: dict[str, MessageEntry] = {}
+
+    def clear(self) -> None:
+        self._buffer = {}
+
+    def update(self, topic: str, value: str) -> None:
+        current = self._buffer.get(topic)
+        if current is None or current.value != value:
+            self._buffer[topic] = MessageEntry(value=value, update=True)
+
+    def send(self) -> None:
+        if not getattr(self._client, "brokerConnected", False):
+            return
+        for topic, entry in self._buffer.items():
+            if not entry.update:
+                continue
+            full_topic = self._topic_prefix if topic == "" else f"{self._topic_prefix}/{topic}"
+            self._client.publish(full_topic, entry.value, 1, True)
+            entry.update = False
+
+
+class DiematicMqttBridge:
+    def __init__(self, config: dict, on_stop: Callable[[], None] | None = None) -> None:
+        self._config = config
+        self._on_stop = on_stop
+        self._run = False
+        self._watchdog: threading.Thread | None = None
+
+        self._topic_prefix = f"{config[CONF_MQTT_TOPIC_PREFIX]}/{config[CONF_MQTT_CLIENT_ID]}"
+        self._discovery_enabled = config[CONF_DISCOVERY_ENABLED]
+        self._discovery_prefix = config[CONF_DISCOVERY_PREFIX]
+
+        self._client = self._create_mqtt_client()
+        self._buffer = MessageBuffer(self._client, self._topic_prefix)
+        self._hassio = Hassio.Hassio(
+            self._client,
+            self._topic_prefix,
+            config[CONF_MQTT_CLIENT_ID],
+            self._discovery_prefix,
+        )
+        self._hassio.availabilityInfo("status", ONLINE, OFFLINE)
+        self._hassio.setDevice("De Dietrich", config[CONF_REGULATOR_TYPE], config[CONF_MQTT_CLIENT_ID])
+
+        self._panel = self._create_panel()
+        self._panel.refreshPeriod = max(config[CONF_PERIOD], 10)
+        self._panel.forceCircuitA = config[CONF_ENABLE_CIRCUIT_A]
+        self._panel.forceCircuitB = config[CONF_ENABLE_CIRCUIT_B]
+
+        self._panel.updateCallback = self._diematic_publish
+
+
+    @staticmethod
+    def _as_int(value: int | str) -> int:
+        if isinstance(value, int):
+            return value
+        return int(str(value), 0)
+
+    def _create_panel(self):
+        panel_cls = {
+            "Diematic3": Diematic3Panel.Diematic3Panel,
+            "Diematic4": Diematic4Panel.Diematic4Panel,
+            "DiematicDelta": DiematicDeltaPanel.DiematicDeltaPanel,
+        }[self._config[CONF_REGULATOR_TYPE]]
+        return panel_cls(
+            self._config[CONF_MODBUS_HOST],
+            int(self._config[CONF_MODBUS_PORT]),
+            self._as_int(self._config[CONF_REGULATOR_ADDRESS]),
+            self._as_int(self._config[CONF_INTERFACE_ADDRESS]),
+            self._config[CONF_TIMEZONE],
+            self._config[CONF_TIME_SYNC],
+        )
+
+    def _create_mqtt_client(self) -> mqtt.Client:
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        else:
+            client = mqtt.Client()
+        if self._config.get(CONF_MQTT_USERNAME):
+            client.username_pw_set(self._config[CONF_MQTT_USERNAME], self._config.get(CONF_MQTT_PASSWORD))
+        client.on_connect = self._on_connect
+        client.on_disconnect = self._on_disconnect
+        client.will_set(f"{self._topic_prefix}/status", OFFLINE, 1, True)
+        client.message_callback_add(f"{self._topic_prefix}/+/+/set", self._param_set)
+        client.message_callback_add(f"{self._topic_prefix}/date/set", self._param_set)
+        if self._discovery_enabled:
+            client.message_callback_add(f"{self._discovery_prefix}/status", self._ha_send_discovery_messages)
+        client.brokerConnected = False
+        return client
+
+    def start(self) -> None:
+        self._run = True
+        self._client.connect_async(self._config[CONF_MQTT_HOST], int(self._config[CONF_MQTT_PORT]))
+        self._client.loop_start()
+        self._panel.loop_start()
+        self._watchdog = threading.Thread(target=self._watchdog_loop, daemon=True)
+        self._watchdog.start()
+        _LOGGER.info("Diematic MQTT bridge started")
+
+    def stop(self) -> None:
+        self._run = False
+        self._panel.loop_stop()
+        self._client.loop_stop()
+        _LOGGER.info("Diematic MQTT bridge stopped")
+
+    def _watchdog_loop(self) -> None:
+        while self._run:
+            time.sleep(5)
+            if threading.active_count() < 3:
+                _LOGGER.error("A worker thread unexpectedly stopped")
+                self.stop()
+                if self._on_stop:
+                    self._on_stop()
+                break
+
+    def _on_connect(self, client, userdata, flags, reason_code, properties=None):
+        del userdata, flags, reason_code, properties
+        client.brokerConnected = True
+        client.subscribe(f"{self._topic_prefix}/+/+/set", 2)
+        client.subscribe(f"{self._topic_prefix}/date/set", 2)
+        if self._discovery_enabled:
+            client.subscribe(f"{self._discovery_prefix}/status", 2)
+        self._buffer.clear()
+        self._buffer.update("status", OFFLINE)
+        self._buffer.send()
+
+    def _on_disconnect(self, client, userdata, flags, reason_code, properties=None):
+        del client, userdata, flags, reason_code, properties
+
+    def _param_set(self, client, userdata, message):
+        del client, userdata
+        topic = message.topic
+        if topic.endswith("Temp/set"):
+            self._temp_set(message)
+        elif topic.endswith("mode/set"):
+            self._mode_set(message)
+        elif topic.endswith("date/set"):
+            self._date_set(message)
+
+    def _mode_set(self, message):
+        table = {
+            "/hotWater/mode/set": "hotWaterMode",
+            "/zoneA/mode/set": "zoneAMode",
+            "/zoneB/mode/set": "zoneBMode",
+        }
+        short_topic = message.topic[len(self._topic_prefix) :]
+        if short_topic in table:
+            setattr(self._panel, table[short_topic], message.payload.decode())
+
+    def _temp_set(self, message):
+        table = {
+            "/hotWater/dayTemp/set": "hotWaterDayTargetTemp",
+            "/hotWater/nightTemp/set": "hotWaterNightTargetTemp",
+            "/zoneA/dayTemp/set": "zoneADayTargetTemp",
+            "/zoneA/nightTemp/set": "zoneANightTargetTemp",
+            "/zoneA/antiiceTemp/set": "zoneAAntiiceTargetTemp",
+            "/zoneB/dayTemp/set": "zoneBDayTargetTemp",
+            "/zoneB/nightTemp/set": "zoneBNightTargetTemp",
+            "/zoneB/antiiceTemp/set": "zoneBAntiiceTargetTemp",
+        }
+        short_topic = message.topic[len(self._topic_prefix) :]
+        if short_topic in table:
+            try:
+                value = float(message.payload)
+            except (TypeError, ValueError):
+                _LOGGER.warning("Invalid temperature payload on %s: %s", message.topic, message.payload)
+                return
+            setattr(self._panel, table[short_topic], value)
+
+    def _date_set(self, message):
+        if message.topic.endswith("/date/set") and message.payload.decode() == "Now":
+            setattr(self._panel, "datetime", dt.datetime.now().astimezone())
+
+    def _diematic_publish(self):
+        def float_value(parameter):
+            return f"{parameter:.1f}" if parameter is not None else ""
+
+        def int_value(parameter):
+            return f"{parameter:d}" if parameter is not None else ""
+
+        self._buffer.update("status", ONLINE if self._panel.availability else OFFLINE)
+        self._buffer.update("date", self._panel.datetime.isoformat() if self._panel.datetime is not None else "")
+        self._buffer.update("lastTimeSync", self._panel.lastTimeSync.isoformat() if self._panel.lastTimeSync is not None else "")
+        self._buffer.update("type", int_value(self._panel.type))
+        self._buffer.update("ctrl", int_value(self._panel.release))
+        self._buffer.update("ext/temp", float_value(self._panel.extTemp))
+        self._buffer.update("temp", float_value(self._panel.temp))
+        self._buffer.update("targetTemp", float_value(self._panel.targetTemp))
+        self._buffer.update("returnTemp", float_value(self._panel.returnTemp))
+        self._buffer.update("waterPressure", float_value(self._panel.waterPressure))
+        self._buffer.update("power", int_value(self._panel.burnerPower))
+        self._buffer.update("smokeTemp", float_value(self._panel.smokeTemp))
+        self._buffer.update("ionizationCurrent", float_value(self._panel.ionizationCurrent))
+        self._buffer.update("fanSpeed", int_value(self._panel.fanSpeed))
+        self._buffer.update("burnerStatus", int_value(self._panel.burnerStatus))
+        self._buffer.update("pumpPower", int_value(self._panel.pumpPower))
+        self._buffer.update("alarm", json.dumps(self._panel.alarm) if self._panel.alarm is not None else "")
+        self._buffer.update("nbImpuls", int_value(self._panel.nbImpuls))
+        self._buffer.update("fctBrul", int_value(self._panel.fctBrul))
+        self._buffer.update("hotWater/pump", int_value(self._panel.hotWaterPump))
+        self._buffer.update("hotWater/temp", float_value(self._panel.hotWaterTemp))
+        self._buffer.update("hotWater/mode", self._panel.hotWaterMode if self._panel.hotWaterMode is not None else "")
+        self._buffer.update("hotWater/dayTemp", float_value(self._panel.hotWaterDayTargetTemp))
+        self._buffer.update("hotWater/nightTemp", float_value(self._panel.hotWaterNightTargetTemp))
+        self._buffer.update("zoneA/temp", float_value(self._panel.zoneATemp))
+        self._buffer.update("zoneA/mode", self._panel.zoneAMode if self._panel.zoneAMode is not None else "")
+        self._buffer.update("zoneA/pump", int_value(self._panel.zoneAPump))
+        self._buffer.update("zoneA/dayTemp", float_value(self._panel.zoneADayTargetTemp))
+        self._buffer.update("zoneA/nightTemp", float_value(self._panel.zoneANightTargetTemp))
+        self._buffer.update("zoneA/antiiceTemp", float_value(self._panel.zoneAAntiiceTargetTemp))
+        self._buffer.update("zoneB/temp", float_value(self._panel.zoneBTemp))
+        self._buffer.update("zoneB/mode", self._panel.zoneBMode if self._panel.zoneBMode is not None else "")
+        self._buffer.update("zoneB/pump", int_value(self._panel.zoneBPump))
+        self._buffer.update("zoneB/dayTemp", float_value(self._panel.zoneBDayTargetTemp))
+        self._buffer.update("zoneB/nightTemp", float_value(self._panel.zoneBNightTargetTemp))
+        self._buffer.update("zoneB/antiiceTemp", float_value(self._panel.zoneBAntiiceTargetTemp))
+        self._buffer.send()
+
+    def _ha_send_discovery_messages(self, client, userdata, message):
+        del client, userdata
+        if message.payload.decode() != "online":
+            return
+
+        # boiler
+        self._hassio.addSensor(
+            "heater_datetime",
+            "Horloge Chaudière",
+            None,
+            "date",
+            "{{ as_timestamp(value) |timestamp_custom ('%d/%m/%Y %H:%M') }}",
+            None,
+        )
+        self._hassio.addSwitch("heater_datetime_set", "Synchro Horloge", "unknown", "date/set", "--", "Now")
+        self._hassio.addSensor("type", "Type", None, "type", None, None)
+        self._hassio.addSensor("ctrl", "Controleur", None, "ctrl", None, None)
+        self._hassio.addSensor("ext_temp", "Température Extérieure", "temperature", "ext/temp", None, "°C")
+        self._hassio.addSensor("boiler_temp", "Température Chaudière", "temperature", "temp", None, "°C")
+        self._hassio.addSensor("target_temp", "Température Cible", "temperature", "targetTemp", None, "°C")
+        self._hassio.addSensor("return_temp", "Température Retour", "temperature", "returnTemp", None, "°C")
+        self._hassio.addSensor("water_pressure", "Pression d'eau", "pressure", "waterPressure", None, "bar")
+        self._hassio.addSensor("power", "Puissance", "power_factor", "power", None, "%")
+        self._hassio.addSensor("smoke_temp", "Température Fumées", "temperature", "smokeTemp", None, "°C")
+        self._hassio.addSensor("ionization_current", "Courant Ionisation", "current", "ionizationCurrent", None, None)
+        self._hassio.addSensor("fan_speed", "Vitesse Ventilateur", None, "fanSpeed", None, "RPM")
+        self._hassio.addBinarySensor("burner_status", "Etat Bruleur", None, "burnerStatus", "1", "0")
+        self._hassio.addSensor("pump_power", "Puissance Pompe", "power_factor", "pumpPower", None, "%")
+        self._hassio.addSensor("alarm", "Etat", None, "alarm", "{{ value_json.txt}}", None)
+        self._hassio.addSensor("alarm_id", "N° Erreur", None, "alarm", "{{ value_json.id}}", None)
+        self._hassio.addSensor("nb_impuls", "Impulsions Bruleur", None, "nbImpuls", None, None)
+        self._hassio.addSensor("fct_brul", "Fonctionnement Bruleur", None, "fctBrul", None, "hours")
+
+        # hot water
+        self._hassio.addBinarySensor("hot_water_pump", "Pompe ECS", None, "hotWater/pump", "1", "0")
+        self._hassio.addSensor("hot_water_temp", "Température ECS", "temperature", "hotWater/temp", None, "°C")
+        self._hassio.addSelect("hot_water_mode", "Mode ECS", "hotWater/mode", "hotWater/mode/set", ["AUTO", "TEMP", "PERM"])
+        self._hassio.addSensor("hot_water_mode", "Mode ECS", None, "hotWater/mode", None, None)
+        self._hassio.addNumber("hot_water_temp_day", "Température ECS Jour", "hotWater/dayTemp", "hotWater/dayTemp/set", 10, 80, 5, "°C")
+        self._hassio.addNumber("hot_water_temp_night", "Température ECS Nuit", "hotWater/nightTemp", "hotWater/nightTemp/set", 10, 80, 5, "°C")
+
+        # zone A
+        self._hassio.addSensor("zone_A_temp", "Température Zone A", "temperature", "zoneA/temp", None, "°C")
+        self._hassio.addSelect(
+            "zone_A_mode",
+            "Mode Zone A",
+            "zoneA/mode",
+            "zoneA/mode/set",
+            ["AUTO", "TEMP JOUR", "PERM JOUR", "TEMP NUIT", "PERM NUIT", "ANTIGEL"],
+        )
+        self._hassio.addSensor("zone_A_mode", "Mode Zone A", None, "zoneA/mode", None, None)
+        self._hassio.addBinarySensor("zone_A_pump", "Pompe Zone A", None, "zoneA/pump", "1", "0")
+        self._hassio.addNumber("zone_A_temp_day", "Température Jour Zone A", "zoneA/dayTemp", "zoneA/dayTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_A_temp_night", "Température Nuit Zone A", "zoneA/nightTemp", "zoneA/nightTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_A_temp_antiice", "Température Antigel Zone A", "zoneA/antiiceTemp", "zoneA/antiiceTemp/set", 5, 20, 0.5, "°C")
+
+        # zone B
+        self._hassio.addSensor("zone_B_temp", "Température Zone B", "temperature", "zoneB/temp", None, "°C")
+        self._hassio.addSelect(
+            "zone_B_mode",
+            "Mode Zone B",
+            "zoneB/mode",
+            "zoneB/mode/set",
+            ["AUTO", "TEMP JOUR", "PERM JOUR", "TEMP NUIT", "PERM NUIT", "ANTIGEL"],
+        )
+        self._hassio.addSensor("zone_B_mode", "Mode Zone B", None, "zoneB/mode", None, None)
+        self._hassio.addBinarySensor("zone_B_pump", "Pompe Zone B", None, "zoneB/pump", "1", "0")
+        self._hassio.addNumber("zone_B_temp_day", "Température Jour Zone B", "zoneB/dayTemp", "zoneB/dayTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_B_temp_night", "Température Nuit Zone B", "zoneB/nightTemp", "zoneB/nightTemp/set", 5, 30, 0.5, "°C")
+        self._hassio.addNumber("zone_B_temp_antiice", "Température Antigel Zone B", "zoneB/antiiceTemp", "zoneB/antiiceTemp/set", 5, 20, 0.5, "°C")
