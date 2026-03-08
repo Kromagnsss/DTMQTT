@@ -194,8 +194,8 @@ class DDModbus:
 								self.logger.debug('not sending to boiler (virtual mode for debug)');
 						else:
 							self.logger.debug('not sending anything as frame in memory is not matching the request received')
-				else:
-					self.logger.debug('slave address is not matching expected list');
+				elif (modbusSlaveAddress!=0):
+					self.logger.debug('slave address is not matching expected list (expected: ' + hex(modbusSlaveAddress) + ' got: ' + hex(frame.modbusAddress) + ' )');
 
 				return frame;
 			except socket.error as exc:
