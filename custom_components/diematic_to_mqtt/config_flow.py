@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
@@ -29,6 +30,7 @@ from .const import (
     DEFAULT_DISCOVERY_PREFIX,
     DEFAULT_ENABLE_CIRCUIT_A,
     DEFAULT_ENABLE_CIRCUIT_B,
+    DEFAULT_INTERFACE_ADDRESS,
     DEFAULT_MQTT_CLIENT_ID,
     DEFAULT_MQTT_HOST,
     DEFAULT_MQTT_PORT,
@@ -42,6 +44,8 @@ from .const import (
     DOMAIN,
     REGULATOR_TYPES,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class DiematicFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -58,14 +62,19 @@ class DiematicFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             try:
-                user_input[CONF_REGULATOR_ADDRESS] = self._parse_address(user_input[CONF_REGULATOR_ADDRESS])
-                user_input[CONF_INTERFACE_ADDRESS] = self._parse_address(user_input[CONF_INTERFACE_ADDRESS])
-            except (TypeError, ValueError):
+                data = dict(user_input)
+                data[CONF_REGULATOR_ADDRESS] = self._parse_address(data[CONF_REGULATOR_ADDRESS])
+                data[CONF_INTERFACE_ADDRESS] = self._parse_address(data[CONF_INTERFACE_ADDRESS])
+            except (TypeError, ValueError, KeyError):
                 errors["base"] = "invalid_address"
+            except Exception:  # defensive guard to avoid frontend 500
+                _LOGGER.exception("Unexpected error while validating config flow input")
+                errors["base"] = "unknown"
             else:
-                await self.async_set_unique_id(user_input[CONF_MQTT_CLIENT_ID])
+                await self.async_set_unique_id(data[CONF_MQTT_CLIENT_ID])
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
+                return self.async_create_entry(title=data[CONF_NAME], data=data)
+
 
         schema = vol.Schema(
             {
@@ -90,4 +99,8 @@ class DiematicFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_DISCOVERY_PREFIX, default=DEFAULT_DISCOVERY_PREFIX): str,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        try:
+            return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        except Exception:  # defensive guard to avoid frontend 500
+            _LOGGER.exception("Unexpected error while building config flow form")
+            return self.async_show_form(step_id="user", data_schema=schema, errors={"base": "unknown"})

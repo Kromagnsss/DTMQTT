@@ -28,7 +28,8 @@
       }
     },
     "error": {
-      "invalid_address": "Adresse invalide: utilisez un entier décimal ou hexadécimal (ex: 10 ou 0x0A)."
+      "invalid_address": "Adresse invalide: utilisez un entier décimal ou hexadécimal (ex: 10 ou 0x0A).",
+      "unknown": "Erreur inattendue. Consultez les logs Home Assistant."
     }
   }
 }
