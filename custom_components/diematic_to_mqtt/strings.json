@@ -9,8 +9,8 @@
           "modbus_host": "Hôte convertisseur Modbus",
           "modbus_port": "Port convertisseur Modbus",
           "regulator_type": "Type de régulateur",
-          "regulator_address": "Adresse régulateur",
-          "interface_address": "Adresse interface",
+          "regulator_address": "Adresse régulateur (ex: 10 ou 0x0A)",
+          "interface_address": "Adresse interface (ex: 0 ou 0x00)",
           "period": "Période de rafraîchissement (s)",
           "timezone": "Fuseau horaire chaudière",
           "time_sync": "Synchroniser l'horloge chaudière",
@@ -26,6 +26,9 @@
           "discovery_prefix": "Préfixe découverte"
         }
       }
+    },
+    "error": {
+      "invalid_address": "Adresse invalide: utilisez un entier décimal ou hexadécimal (ex: 10 ou 0x0A)."
     }
   }
 }

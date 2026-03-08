@@ -99,6 +99,13 @@ class DiematicMqttBridge:
 
         self._panel.updateCallback = self._diematic_publish
 
+
+    @staticmethod
+    def _as_int(value: int | str) -> int:
+        if isinstance(value, int):
+            return value
+        return int(str(value), 0)
+
     def _create_panel(self):
         panel_cls = {
             "Diematic3": Diematic3Panel.Diematic3Panel,
@@ -108,8 +115,8 @@ class DiematicMqttBridge:
         return panel_cls(
             self._config[CONF_MODBUS_HOST],
             int(self._config[CONF_MODBUS_PORT]),
-            int(self._config[CONF_REGULATOR_ADDRESS]),
-            int(self._config[CONF_INTERFACE_ADDRESS]),
+            self._as_int(self._config[CONF_REGULATOR_ADDRESS]),
+            self._as_int(self._config[CONF_INTERFACE_ADDRESS]),
             self._config[CONF_TIMEZONE],
             self._config[CONF_TIME_SYNC],
         )
@@ -214,49 +221,49 @@ class DiematicMqttBridge:
         if message.topic.endswith("/date/set") and message.payload.decode() == "Now":
             setattr(self._panel, "datetime", dt.datetime.now().astimezone())
 
-    def _diematic_publish(self, panel):
+    def _diematic_publish(self):
         def float_value(parameter):
             return f"{parameter:.1f}" if parameter is not None else ""
 
         def int_value(parameter):
             return f"{parameter:d}" if parameter is not None else ""
 
-        self._buffer.update("status", ONLINE if panel.availability else OFFLINE)
-        self._buffer.update("date", panel.datetime.isoformat() if panel.datetime is not None else "")
-        self._buffer.update("lastTimeSync", panel.lastTimeSync.isoformat() if panel.lastTimeSync is not None else "")
-        self._buffer.update("type", int_value(panel.type))
-        self._buffer.update("ctrl", int_value(panel.release))
-        self._buffer.update("ext/temp", float_value(panel.extTemp))
-        self._buffer.update("temp", float_value(panel.temp))
-        self._buffer.update("targetTemp", float_value(panel.targetTemp))
-        self._buffer.update("returnTemp", float_value(panel.returnTemp))
-        self._buffer.update("waterPressure", float_value(panel.waterPressure))
-        self._buffer.update("power", int_value(panel.burnerPower))
-        self._buffer.update("smokeTemp", float_value(panel.smokeTemp))
-        self._buffer.update("ionizationCurrent", float_value(panel.ionizationCurrent))
-        self._buffer.update("fanSpeed", int_value(panel.fanSpeed))
-        self._buffer.update("burnerStatus", int_value(panel.burnerStatus))
-        self._buffer.update("pumpPower", int_value(panel.pumpPower))
-        self._buffer.update("alarm", json.dumps(panel.alarm) if panel.alarm is not None else "")
-        self._buffer.update("nbImpuls", int_value(panel.nbImpuls))
-        self._buffer.update("fctBrul", int_value(panel.fctBrul))
-        self._buffer.update("hotWater/pump", int_value(panel.hotWaterPump))
-        self._buffer.update("hotWater/temp", float_value(panel.hotWaterTemp))
-        self._buffer.update("hotWater/mode", panel.hotWaterMode if panel.hotWaterMode is not None else "")
-        self._buffer.update("hotWater/dayTemp", float_value(panel.hotWaterDayTargetTemp))
-        self._buffer.update("hotWater/nightTemp", float_value(panel.hotWaterNightTargetTemp))
-        self._buffer.update("zoneA/temp", float_value(panel.zoneATemp))
-        self._buffer.update("zoneA/mode", panel.zoneAMode if panel.zoneAMode is not None else "")
-        self._buffer.update("zoneA/pump", int_value(panel.zoneAPump))
-        self._buffer.update("zoneA/dayTemp", float_value(panel.zoneADayTargetTemp))
-        self._buffer.update("zoneA/nightTemp", float_value(panel.zoneANightTargetTemp))
-        self._buffer.update("zoneA/antiiceTemp", float_value(panel.zoneAAntiiceTargetTemp))
-        self._buffer.update("zoneB/temp", float_value(panel.zoneBTemp))
-        self._buffer.update("zoneB/mode", panel.zoneBMode if panel.zoneBMode is not None else "")
-        self._buffer.update("zoneB/pump", int_value(panel.zoneBPump))
-        self._buffer.update("zoneB/dayTemp", float_value(panel.zoneBDayTargetTemp))
-        self._buffer.update("zoneB/nightTemp", float_value(panel.zoneBNightTargetTemp))
-        self._buffer.update("zoneB/antiiceTemp", float_value(panel.zoneBAntiiceTargetTemp))
+        self._buffer.update("status", ONLINE if self._panel.availability else OFFLINE)
+        self._buffer.update("date", self._panel.datetime.isoformat() if self._panel.datetime is not None else "")
+        self._buffer.update("lastTimeSync", self._panel.lastTimeSync.isoformat() if self._panel.lastTimeSync is not None else "")
+        self._buffer.update("type", int_value(self._panel.type))
+        self._buffer.update("ctrl", int_value(self._panel.release))
+        self._buffer.update("ext/temp", float_value(self._panel.extTemp))
+        self._buffer.update("temp", float_value(self._panel.temp))
+        self._buffer.update("targetTemp", float_value(self._panel.targetTemp))
+        self._buffer.update("returnTemp", float_value(self._panel.returnTemp))
+        self._buffer.update("waterPressure", float_value(self._panel.waterPressure))
+        self._buffer.update("power", int_value(self._panel.burnerPower))
+        self._buffer.update("smokeTemp", float_value(self._panel.smokeTemp))
+        self._buffer.update("ionizationCurrent", float_value(self._panel.ionizationCurrent))
+        self._buffer.update("fanSpeed", int_value(self._panel.fanSpeed))
+        self._buffer.update("burnerStatus", int_value(self._panel.burnerStatus))
+        self._buffer.update("pumpPower", int_value(self._panel.pumpPower))
+        self._buffer.update("alarm", json.dumps(self._panel.alarm) if self._panel.alarm is not None else "")
+        self._buffer.update("nbImpuls", int_value(self._panel.nbImpuls))
+        self._buffer.update("fctBrul", int_value(self._panel.fctBrul))
+        self._buffer.update("hotWater/pump", int_value(self._panel.hotWaterPump))
+        self._buffer.update("hotWater/temp", float_value(self._panel.hotWaterTemp))
+        self._buffer.update("hotWater/mode", self._panel.hotWaterMode if self._panel.hotWaterMode is not None else "")
+        self._buffer.update("hotWater/dayTemp", float_value(self._panel.hotWaterDayTargetTemp))
+        self._buffer.update("hotWater/nightTemp", float_value(self._panel.hotWaterNightTargetTemp))
+        self._buffer.update("zoneA/temp", float_value(self._panel.zoneATemp))
+        self._buffer.update("zoneA/mode", self._panel.zoneAMode if self._panel.zoneAMode is not None else "")
+        self._buffer.update("zoneA/pump", int_value(self._panel.zoneAPump))
+        self._buffer.update("zoneA/dayTemp", float_value(self._panel.zoneADayTargetTemp))
+        self._buffer.update("zoneA/nightTemp", float_value(self._panel.zoneANightTargetTemp))
+        self._buffer.update("zoneA/antiiceTemp", float_value(self._panel.zoneAAntiiceTargetTemp))
+        self._buffer.update("zoneB/temp", float_value(self._panel.zoneBTemp))
+        self._buffer.update("zoneB/mode", self._panel.zoneBMode if self._panel.zoneBMode is not None else "")
+        self._buffer.update("zoneB/pump", int_value(self._panel.zoneBPump))
+        self._buffer.update("zoneB/dayTemp", float_value(self._panel.zoneBDayTargetTemp))
+        self._buffer.update("zoneB/nightTemp", float_value(self._panel.zoneBNightTargetTemp))
+        self._buffer.update("zoneB/antiiceTemp", float_value(self._panel.zoneBAntiiceTargetTemp))
         self._buffer.send()
 
     def _ha_send_discovery_messages(self, client, userdata, message):

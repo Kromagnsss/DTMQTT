@@ -38,7 +38,6 @@ from .const import (
     DEFAULT_PERIOD,
     DEFAULT_REGULATOR_ADDRESS,
     DEFAULT_REGULATOR_TYPE,
-    DEFAULT_INTERFACE_ADDRESS,
     DEFAULT_TIME_SYNC,
     DOMAIN,
     REGULATOR_TYPES,
@@ -48,11 +47,25 @@ from .const import (
 class DiematicFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
+    @staticmethod
+    def _parse_address(value: str | int) -> int:
+        if isinstance(value, int):
+            return value
+        return int(value.strip(), 0)
+
     async def async_step_user(self, user_input=None):
+        errors = {}
+
         if user_input is not None:
-            await self.async_set_unique_id(user_input[CONF_MQTT_CLIENT_ID])
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
+            try:
+                user_input[CONF_REGULATOR_ADDRESS] = self._parse_address(user_input[CONF_REGULATOR_ADDRESS])
+                user_input[CONF_INTERFACE_ADDRESS] = self._parse_address(user_input[CONF_INTERFACE_ADDRESS])
+            except (TypeError, ValueError):
+                errors["base"] = "invalid_address"
+            else:
+                await self.async_set_unique_id(user_input[CONF_MQTT_CLIENT_ID])
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(title=user_input[CONF_NAME], data=user_input)
 
         schema = vol.Schema(
             {
@@ -60,8 +73,8 @@ class DiematicFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_MODBUS_HOST): str,
                 vol.Required(CONF_MODBUS_PORT, default=DEFAULT_MODBUS_PORT): int,
                 vol.Required(CONF_REGULATOR_TYPE, default=DEFAULT_REGULATOR_TYPE): vol.In(REGULATOR_TYPES),
-                vol.Required(CONF_REGULATOR_ADDRESS, default=DEFAULT_REGULATOR_ADDRESS): int,
-                vol.Required(CONF_INTERFACE_ADDRESS, default=DEFAULT_INTERFACE_ADDRESS): int,
+                vol.Required(CONF_REGULATOR_ADDRESS, default=hex(DEFAULT_REGULATOR_ADDRESS)): str,
+                vol.Required(CONF_INTERFACE_ADDRESS, default=hex(DEFAULT_INTERFACE_ADDRESS)): str,
                 vol.Required(CONF_PERIOD, default=DEFAULT_PERIOD): int,
                 vol.Optional(CONF_TIMEZONE, default=""): str,
                 vol.Required(CONF_TIME_SYNC, default=DEFAULT_TIME_SYNC): bool,
@@ -77,4 +90,4 @@ class DiematicFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_DISCOVERY_PREFIX, default=DEFAULT_DISCOVERY_PREFIX): str,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema)
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
